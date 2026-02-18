@@ -1,0 +1,47 @@
+{
+  "name": "glimps-backend",
+  "version": "0.1.0",
+  "description": "Glimps personal memory search engine - Backend API",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit",
+    "db:migrate": "node -r dotenv/config scripts/migrate.js",
+    "db:print-schema": "node scripts/print-schema.js",
+    "db:migrate:only": "node -r dotenv/config scripts/migrate-only.js"
+  },
+  "keywords": [
+    "memory",
+    "search",
+    "ai",
+    "pgvector"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.3",
+    "dotenv": "^16.3.1",
+    "openai": "^4.69.0",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/node": "^20.10.5",
+    "@types/pg": "^8.10.9",
+    "@types/multer": "^1.4.11",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
