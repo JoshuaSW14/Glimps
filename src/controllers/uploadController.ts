@@ -8,11 +8,11 @@ import { signedUrlService } from '../services/storage/signedUrlService';
 import { storageService } from '../services/storage/storageService';
 import { memoryRepository } from '../db/repositories';
 import { memoryPipeline } from '../services/pipeline/memoryPipeline';
-import { getPool } from '../db';
 import { logger } from '../utils/logger';
 import { ValidationError } from '../utils/errors';
 import { AuthRequest } from '../middleware/auth';
 import { serializeMemory } from '../utils/serializeMemory';
+import { DatabaseError } from '../utils/errors';
 import { Modality, MemorySourceEnum, MediaType, ProcessingStatus } from '../types';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -100,28 +100,33 @@ export class UploadController {
       const capturedAt = new Date();
       const mediaType = modality === 'voice' ? MediaType.Audio : MediaType.Photo;
 
-      // Only link memory to user if they exist in DB (avoids FK violation if users table was reset)
-      let effectiveUserId: string | undefined = userId;
+      // Try with userId first so the memory is owned and findable by the user. Only omit on FK violation.
+      let memory: Awaited<ReturnType<typeof memoryRepository.create>>;
       try {
-        const pool = getPool();
-        const userCheck = await pool.query('SELECT 1 FROM users WHERE id = $1', [userId]);
-        if (userCheck.rows.length === 0) {
-          logger.warn('Signed upload: user not found in users table, creating memory without user_id', { userId });
-          effectiveUserId = undefined;
-        }
+        memory = await memoryRepository.create({
+          userId,
+          capturedAt,
+          source: MemorySourceEnum.Upload,
+          mediaType,
+          storagePath: storedFile.path,
+          processingStatus: ProcessingStatus.Pending,
+        });
       } catch (err) {
-        logger.warn('Signed upload: could not verify user, creating memory without user_id', { userId, err });
-        effectiveUserId = undefined;
+        const code = err instanceof DatabaseError ? (err.details as { code?: string })?.code : undefined;
+        if (code === '23503') {
+          logger.warn('Signed upload: user not in DB (FK), creating memory without user_id', { userId });
+          memory = await memoryRepository.create({
+            userId: undefined,
+            capturedAt,
+            source: MemorySourceEnum.Upload,
+            mediaType,
+            storagePath: storedFile.path,
+            processingStatus: ProcessingStatus.Pending,
+          });
+        } else {
+          throw err;
+        }
       }
-
-      const memory = await memoryRepository.create({
-        userId: effectiveUserId,
-        capturedAt,
-        source: MemorySourceEnum.Upload,
-        mediaType,
-        storagePath: storedFile.path,
-        processingStatus: ProcessingStatus.Pending,
-      });
 
       const result = await memoryPipeline.processMemory({
         memoryId: memory.id,
