@@ -6,12 +6,12 @@
 import { Response, NextFunction } from 'express';
 import { signedUrlService } from '../services/storage/signedUrlService';
 import { storageService } from '../services/storage/storageService';
-import { memorySourceRepository } from '../db/repositories';
+import { memoryRepository } from '../db/repositories';
 import { memoryPipeline } from '../services/pipeline/memoryPipeline';
 import { logger } from '../utils/logger';
 import { ValidationError } from '../utils/errors';
 import { AuthRequest } from '../middleware/auth';
-import { Modality } from '../types';
+import { Modality, MemorySourceEnum, MediaType, ProcessingStatus } from '../types';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -95,20 +95,20 @@ export class UploadController {
         fileSize: file.size,
         mimeType: file.mimetype,
       };
-      const recordedAt = new Date();
+      const capturedAt = new Date();
+      const mediaType = modality === 'voice' ? MediaType.Audio : MediaType.Photo;
 
-      const memorySource = await memorySourceRepository.create({
-        modality,
-        storagePath: storedFile.path,
-        metadata,
+      const memory = await memoryRepository.create({
         userId,
+        capturedAt,
+        source: MemorySourceEnum.Upload,
+        mediaType,
+        storagePath: storedFile.path,
+        processingStatus: ProcessingStatus.Pending,
       });
 
       const result = await memoryPipeline.processMemory({
-        memorySourceId: memorySource.id,
-        recordedAt,
-        modality,
-        storagePath: storedFile.path,
+        memoryId: memory.id,
         metadata,
         userId,
       });

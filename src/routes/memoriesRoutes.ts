@@ -23,20 +23,6 @@ router.post(
   (req, res, next) => memoriesController.upload(req, res, next)
 );
 
-// Get memory source status
-router.get(
-  '/sources/:sourceId',
-  validateUUID('sourceId'),
-  (req, res, next) => memoriesController.getSourceStatus(req, res, next)
-);
-
-// Retry failed memory processing
-router.post(
-  '/sources/:sourceId/retry',
-  validateUUID('sourceId'),
-  (req, res, next) => memoriesController.retryProcessing(req, res, next)
-);
-
 // List recent memories
 router.get(
   '/',
@@ -73,6 +59,30 @@ router.get(
   '/:id',
   validateUUID('id'),
   (req, res, next) => memoriesController.getById(req, res, next)
+);
+
+// Context (must be after /:id and before /:id/retry)
+router.get(
+  '/:id/context',
+  validateUUID('id'),
+  (req, res, next) => memoriesController.getContext(req, res, next)
+);
+router.post(
+  '/:id/context',
+  validateUUID('id'),
+  (req, res, next) => memoriesController.updateContext(req, res, next)
+);
+router.post(
+  '/:id/confirm-ai',
+  validateUUID('id'),
+  (req, res, next) => memoriesController.confirmAi(req, res, next)
+);
+
+// Retry failed memory processing
+router.post(
+  '/:id/retry',
+  validateUUID('id'),
+  (req, res, next) => memoriesController.retryProcessing(req, res, next)
 );
 
 export { router as memoriesRoutes };

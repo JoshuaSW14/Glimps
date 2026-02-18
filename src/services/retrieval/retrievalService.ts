@@ -1,30 +1,32 @@
 /**
  * Retrieval Service
- * Phase 3: Semantic memory search with filtering
+ * Hybrid ranking: 0.45 embedding + 0.20 temporal + 0.20 place + 0.10 people + 0.05 tags
  */
 
-import { memoryRepository, memoryEmbeddingRepository } from '../../db/repositories';
+import {
+  memoryRepository,
+  memoryEmbeddingRepository,
+  memoryContextRepository,
+  memoryTagRepository,
+  memoryPeopleRepository,
+} from '../../db/repositories';
 import { embeddingService } from '../ai';
 import { logger } from '../../utils/logger';
 import { Memory } from '../../types';
+import { hybridScore } from './hybridScorer';
 
 export interface SearchFilters {
-  // Time-based filters
   startDate?: Date;
   endDate?: Date;
-  
-  // Location-based filters
   latitude?: number;
   longitude?: number;
   radiusKm?: number;
-  
-  // Result limits
   limit?: number;
 }
 
 export interface SearchResult {
   memory: Memory;
-  score: number; // Similarity score (1 - distance, higher = more similar)
+  score: number;
 }
 
 export interface RetrievalResult {
@@ -35,105 +37,103 @@ export interface RetrievalResult {
   searchTimeMs: number;
 }
 
+const CANDIDATE_MULTIPLIER = 8; // fetch 8x limit for re-ranking
+
 export class RetrievalService {
-  /**
-   * Search for memories using semantic similarity (optionally scoped to user)
-   */
   async search(
     query: string,
     filters: SearchFilters = {},
     userId?: string
   ): Promise<RetrievalResult> {
     const startTime = Date.now();
-    
-    logger.info('Starting memory search', {
-      query,
-      filters,
-      hasUserId: !!userId,
-    });
-    
+    const limit = filters.limit || 10;
+    const candidateLimit = Math.min(limit * CANDIDATE_MULTIPLIER, 100);
+
+    logger.info('Starting memory search (hybrid)', { query, filters, hasUserId: !!userId });
+
     try {
-      // Step 1: Generate query embedding
       const queryEmbedding = await embeddingService.generateEmbedding(query);
-      
-      // Step 2: Vector similarity search
-      const limit = filters.limit || 10;
-      const similarMemories = await memoryEmbeddingRepository.findSimilar(
+      const similar = await memoryEmbeddingRepository.findSimilar(
         queryEmbedding,
-        limit * 3, // Get more candidates for filtering
+        candidateLimit,
         undefined,
         userId
       );
-      
-      // Step 3: Get full memory objects
-      const memoryPromises = similarMemories.map(async (result) => {
-        const memory = await memoryRepository.findById(result.memoryId);
+
+      if (similar.length === 0) {
         return {
-          memory,
-          distance: result.distance,
+          results: [],
+          query,
+          filters,
+          totalResults: 0,
+          searchTimeMs: Date.now() - startTime,
         };
-      });
-      
-      const memoriesWithDistance = await Promise.all(memoryPromises);
-      
-      // Step 4: Apply filters
-      let filteredMemories = memoriesWithDistance;
-      
-      // Time filter
-      if (filters.startDate || filters.endDate) {
-        filteredMemories = filteredMemories.filter(({ memory }) => {
-          const recordedAt = new Date(memory.recordedAt);
-          
-          if (filters.startDate && recordedAt < filters.startDate) {
-            return false;
-          }
-          
-          if (filters.endDate && recordedAt > filters.endDate) {
-            return false;
-          }
-          
-          return true;
+      }
+
+      const memoryIds = similar.map((s) => s.memoryId);
+      const [memories, contextMap, tagsMap, peopleMap] = await Promise.all([
+        memoryRepository.findByIds(memoryIds),
+        memoryContextRepository.findByMemoryIds(memoryIds),
+        memoryTagRepository.findByMemoryIds(memoryIds),
+        memoryPeopleRepository.findByMemoryIds(memoryIds),
+      ]);
+
+      const memoryById = new Map<string, Memory>();
+      for (const m of memories) {
+        const ctx = contextMap.get(m.id);
+        memoryById.set(m.id, {
+          ...m,
+          latitude: ctx?.latitude ?? undefined,
+          longitude: ctx?.longitude ?? undefined,
+          locationName: ctx?.locationName ?? undefined,
         });
       }
-      
-      // Location filter (simple radius check)
-      if (
-        filters.latitude !== undefined &&
-        filters.longitude !== undefined &&
-        filters.radiusKm !== undefined
-      ) {
-        filteredMemories = filteredMemories.filter(({ memory }) => {
-          if (memory.latitude === undefined || memory.longitude === undefined) {
-            return false;
-          }
-          
-          const distance = this.calculateDistance(
-            filters.latitude!,
-            filters.longitude!,
+
+      let scored: Array<{ memory: Memory; score: number; breakdown: any }> = [];
+      for (let i = 0; i < similar.length; i++) {
+        const { memoryId, distance } = similar[i];
+        const memory = memoryById.get(memoryId);
+        if (!memory) continue;
+        if (filters.startDate || filters.endDate) {
+          const capturedAt = new Date(memory.capturedAt);
+          if (filters.startDate && capturedAt < filters.startDate) continue;
+          if (filters.endDate && capturedAt > filters.endDate) continue;
+        }
+        if (
+          filters.latitude !== undefined &&
+          filters.longitude !== undefined &&
+          filters.radiusKm !== undefined
+        ) {
+          if (memory.latitude == null || memory.longitude == null) continue;
+          const d = this.calculateDistance(
+            filters.latitude,
+            filters.longitude,
             memory.latitude,
             memory.longitude
           );
-          
-          return distance <= filters.radiusKm!;
-        });
-      }
-      
-      // Step 5: Limit results and convert distance to score
-      const results: SearchResult[] = filteredMemories
-        .slice(0, limit)
-        .map(({ memory, distance }) => ({
+          if (d > filters.radiusKm) continue;
+        }
+        const embeddingSim = Math.max(0, 1 - distance);
+        const out = hybridScore({
           memory,
-          score: 1 - distance, // Convert distance to similarity score
-        }));
-      
+          embeddingSimilarity: embeddingSim,
+          context: contextMap.get(memoryId) ?? null,
+          tags: tagsMap.get(memoryId) ?? [],
+          people: peopleMap.get(memoryId) ?? [],
+        });
+        scored.push({ memory, score: out.score, breakdown: out.breakdown });
+      }
+
+      scored.sort((a, b) => b.score - a.score);
+      const results: SearchResult[] = scored.slice(0, limit).map(({ memory, score }) => ({ memory, score }));
+
       const searchTimeMs = Date.now() - startTime;
-      
-      logger.info('Memory search completed', {
+      logger.info('Memory search completed (hybrid)', {
         query,
         totalResults: results.length,
         searchTimeMs,
       });
-      
+
       return {
         results,
         query,
@@ -146,32 +146,23 @@ export class RetrievalService {
       throw error;
     }
   }
-  
-  /**
-   * Calculate distance between two coordinates (Haversine formula)
-   * Returns distance in kilometers
-   */
+
   private calculateDistance(
     lat1: number,
     lon1: number,
     lat2: number,
     lon2: number
   ): number {
-    const R = 6371; // Earth's radius in km
+    const R = 6371;
     const dLat = this.toRad(lat2 - lat1);
     const dLon = this.toRad(lon2 - lon1);
-    
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.toRad(lat1)) *
-        Math.cos(this.toRad(lat2)) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
-    
+      Math.cos(this.toRad(lat1)) * Math.cos(this.toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   }
-  
+
   private toRad(degrees: number): number {
     return degrees * (Math.PI / 180);
   }

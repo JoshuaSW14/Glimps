@@ -42,7 +42,7 @@ export class EventClusteringService {
     const timeWindow = params.timeWindowMinutes || DEFAULT_TIME_WINDOW_MINUTES;
     const distanceThreshold = params.distanceThresholdMeters || DEFAULT_DISTANCE_THRESHOLD_METERS;
     
-    const targetTime = targetMemory.recordedAt.getTime();
+    const targetTime = targetMemory.capturedAt.getTime();
     const timeWindowMs = timeWindow * 60 * 1000;
     
     return allMemories.filter(memory => {
@@ -52,7 +52,7 @@ export class EventClusteringService {
       }
       
       // Check time proximity
-      const memoryTime = memory.recordedAt.getTime();
+      const memoryTime = memory.capturedAt.getTime();
       const timeDiff = Math.abs(memoryTime - targetTime);
       
       if (timeDiff > timeWindowMs) {
@@ -99,7 +99,7 @@ export class EventClusteringService {
     }
     
     // Calculate time span
-    const times = memories.map(m => m.recordedAt.getTime()).sort((a, b) => a - b);
+    const times = memories.map(m => m.capturedAt.getTime()).sort((a, b) => a - b);
     const timeSpanMinutes = (times[times.length - 1] - times[0]) / (60 * 1000);
     
     // Calculate location spread if available

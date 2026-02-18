@@ -51,9 +51,9 @@ export class AnswerController {
           confidence: result.confidence,
           memories: result.memories.map(m => ({
             id: m.id,
-            normalizedText: m.normalizedText,
-            recordedAt: m.recordedAt,
-            modality: m.modality,
+            transcript: m.transcript,
+            capturedAt: m.capturedAt,
+            mediaType: m.mediaType,
             locationName: m.locationName,
           })),
           events: result.events,

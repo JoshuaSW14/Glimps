@@ -1,11 +1,12 @@
 /**
  * Repository Exports
- * Phase 2-4: Centralized repository access
- * Phase 1 (Event Domain): Event repositories
+ * Semantic memory graph: memories, context, tags, people, embeddings
  */
 
-export * from './memorySourceRepository';
 export * from './memoryRepository';
+export * from './memoryContextRepository';
+export * from './memoryTagRepository';
+export * from './memoryPeopleRepository';
 export * from './memoryEmbeddingRepository';
 export * from './retrievalLogRepository';
 export * from './labelRepository';

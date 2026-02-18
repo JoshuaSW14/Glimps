@@ -19,32 +19,23 @@ export enum ProcessingStatus {
   Failed = 'failed',
 }
 
-// ============================================================================
-// MEMORY SOURCE
-// ============================================================================
-
-/**
- * Raw upload (voice file or image)
- * Immutable after creation
- */
-export interface MemorySource {
-  id: string; // UUID
-  createdAt: Date;
-  modality: Modality;
-  storagePath: string; // Path or URL to raw file
-  metadata: Record<string, any>; // EXIF, duration, format, etc.
-  processingStatus: ProcessingStatus;
-  errorMessage?: string;
+/** How the memory was captured */
+export enum MemorySourceEnum {
+  Camera = 'camera',
+  Upload = 'upload',
+  Voice = 'voice',
 }
 
-/**
- * Input for creating a new memory source
- */
-export interface CreateMemorySourceInput {
-  modality: Modality;
-  storagePath: string;
-  metadata?: Record<string, any>;
-  userId?: string;
+/** Media type of the memory */
+export enum MediaType {
+  Photo = 'photo',
+  Audio = 'audio',
+}
+
+/** Origin of a tag (AI-inferred or user-set) */
+export enum TagOrigin {
+  AI = 'ai',
+  User = 'user',
 }
 
 // ============================================================================
@@ -52,38 +43,116 @@ export interface CreateMemorySourceInput {
 // ============================================================================
 
 /**
- * Derived content from memory source (1:1)
- * Contains processed text and location
+ * Memory: capture + transcript + summary + storage path.
+ * Location/note live in memory_context; tags in memory_tags; people in memory_people.
  */
 export interface Memory {
   id: string; // UUID
-  memorySourceId: string; // UUID FK
-  userId?: string; // Set when auth enabled
+  userId?: string;
   createdAt: Date;
-  recordedAt: Date; // When the moment was captured
-  modality: Modality;
-  rawText: string; // Original transcript/caption
-  normalizedText: string; // Cleaned text for embedding
-  aiSummary?: string; // Optional short summary for UI
+  capturedAt: Date; // When the moment was captured (EXIF or user)
+  source: MemorySourceEnum;
+  mediaType: MediaType;
+  storagePath: string;
+  transcript?: string | null;
+  aiSummary?: string | null;
+  processingStatus: ProcessingStatus;
+  // Resolved from memory_context when loaded with context (for event clustering, etc.)
   latitude?: number;
   longitude?: number;
   locationName?: string;
 }
 
 /**
- * Input for creating a new memory
+ * Input for creating a new memory (e.g. on upload, pending)
  */
 export interface CreateMemoryInput {
-  memorySourceId: string;
   userId?: string;
-  recordedAt: Date;
-  modality: Modality;
-  rawText: string;
-  normalizedText: string;
-  aiSummary?: string;
-  latitude?: number;
-  longitude?: number;
-  locationName?: string;
+  capturedAt: Date;
+  source: MemorySourceEnum;
+  mediaType: MediaType;
+  storagePath: string;
+  transcript?: string | null;
+  aiSummary?: string | null;
+  processingStatus: ProcessingStatus;
+}
+
+/**
+ * Input for updating a memory (pipeline completion)
+ */
+export interface UpdateMemoryInput {
+  capturedAt?: Date;
+  transcript?: string | null;
+  aiSummary?: string | null;
+  processingStatus?: ProcessingStatus;
+}
+
+// ============================================================================
+// MEMORY CONTEXT
+// ============================================================================
+
+export interface MemoryContext {
+  memoryId: string;
+  userNote?: string | null;
+  locationName?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  confirmed: boolean;
+}
+
+export interface CreateMemoryContextInput {
+  memoryId: string;
+  userNote?: string | null;
+  locationName?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  confirmed?: boolean;
+}
+
+export interface UpdateMemoryContextInput {
+  userNote?: string | null;
+  locationName?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  confirmed?: boolean;
+}
+
+// ============================================================================
+// MEMORY TAGS
+// ============================================================================
+
+export interface MemoryTag {
+  id: string;
+  memoryId: string;
+  tag: string;
+  confidence?: number | null;
+  origin: TagOrigin;
+}
+
+export interface CreateMemoryTagInput {
+  memoryId: string;
+  tag: string;
+  confidence?: number | null;
+  origin: TagOrigin;
+}
+
+// ============================================================================
+// MEMORY PEOPLE
+// ============================================================================
+
+export interface MemoryPerson {
+  id: string;
+  memoryId: string;
+  personName: string;
+  confidence?: number | null;
+  confirmed: boolean;
+}
+
+export interface CreateMemoryPersonInput {
+  memoryId: string;
+  personName: string;
+  confidence?: number | null;
+  confirmed?: boolean;
 }
 
 /**
@@ -195,34 +264,53 @@ export interface CreateRetrievalLogInput {
 // ============================================================================
 
 /**
- * Raw database row from memory_sources table
- */
-export interface MemorySourceRow {
-  id: string;
-  created_at: Date;
-  modality: string;
-  storage_path: string;
-  metadata: any;
-  processing_status: string;
-  error_message: string | null;
-}
-
-/**
- * Raw database row from memories table
+ * Raw database row from memories table (semantic memory graph schema)
  */
 export interface MemoryRow {
   id: string;
-  memory_source_id: string;
   user_id: string | null;
   created_at: Date;
-  recorded_at: Date;
-  modality: string;
-  raw_text: string;
-  normalized_text: string;
+  captured_at: Date;
+  source: string;
+  media_type: string;
+  storage_path: string;
+  transcript: string | null;
   ai_summary: string | null;
+  processing_status: string;
+}
+
+/**
+ * Raw database row from memory_context table
+ */
+export interface MemoryContextRow {
+  memory_id: string;
+  user_note: string | null;
+  location_name: string | null;
   latitude: number | null;
   longitude: number | null;
-  location_name: string | null;
+  confirmed: boolean;
+}
+
+/**
+ * Raw database row from memory_tags table
+ */
+export interface MemoryTagRow {
+  id: string;
+  memory_id: string;
+  tag: string;
+  confidence: number | null;
+  origin: string;
+}
+
+/**
+ * Raw database row from memory_people table
+ */
+export interface MemoryPersonRow {
+  id: string;
+  memory_id: string;
+  person_name: string;
+  confidence: number | null;
+  confirmed: boolean;
 }
 
 /**
@@ -263,34 +351,53 @@ export interface LabelRow {
 // ============================================================================
 
 /**
- * Convert database row to MemorySource domain object
- */
-export const mapMemorySourceRow = (row: MemorySourceRow): MemorySource => ({
-  id: row.id,
-  createdAt: row.created_at,
-  modality: row.modality as Modality,
-  storagePath: row.storage_path,
-  metadata: row.metadata || {},
-  processingStatus: row.processing_status as ProcessingStatus,
-  errorMessage: row.error_message || undefined,
-});
-
-/**
- * Convert database row to Memory domain object
+ * Convert database row to Memory domain object (no context; use repository with context to attach location)
  */
 export const mapMemoryRow = (row: MemoryRow): Memory => ({
   id: row.id,
-  memorySourceId: row.memory_source_id,
   userId: row.user_id || undefined,
   createdAt: row.created_at,
-  recordedAt: row.recorded_at,
-  modality: row.modality as Modality,
-  rawText: row.raw_text,
-  normalizedText: row.normalized_text,
-  aiSummary: row.ai_summary || undefined,
-  latitude: row.latitude || undefined,
-  longitude: row.longitude || undefined,
-  locationName: row.location_name || undefined,
+  capturedAt: row.captured_at,
+  source: row.source as MemorySourceEnum,
+  mediaType: row.media_type as MediaType,
+  storagePath: row.storage_path,
+  transcript: row.transcript ?? undefined,
+  aiSummary: row.ai_summary ?? undefined,
+  processingStatus: row.processing_status as ProcessingStatus,
+});
+
+/**
+ * Convert database row to MemoryContext domain object
+ */
+export const mapMemoryContextRow = (row: MemoryContextRow): MemoryContext => ({
+  memoryId: row.memory_id,
+  userNote: row.user_note ?? undefined,
+  locationName: row.location_name ?? undefined,
+  latitude: row.latitude ?? undefined,
+  longitude: row.longitude ?? undefined,
+  confirmed: row.confirmed,
+});
+
+/**
+ * Convert database row to MemoryTag domain object
+ */
+export const mapMemoryTagRow = (row: MemoryTagRow): MemoryTag => ({
+  id: row.id,
+  memoryId: row.memory_id,
+  tag: row.tag,
+  confidence: row.confidence ?? undefined,
+  origin: row.origin as TagOrigin,
+});
+
+/**
+ * Convert database row to MemoryPerson domain object
+ */
+export const mapMemoryPersonRow = (row: MemoryPersonRow): MemoryPerson => ({
+  id: row.id,
+  memoryId: row.memory_id,
+  personName: row.person_name,
+  confidence: row.confidence ?? undefined,
+  confirmed: row.confirmed,
 });
 
 /**

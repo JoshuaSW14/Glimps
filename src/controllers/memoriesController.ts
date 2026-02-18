@@ -5,39 +5,38 @@
 
 import { Response, NextFunction } from 'express';
 import path from 'path';
-import { memorySourceRepository, memoryRepository, memoryLabelRepository, labelRepository } from '../db/repositories';
+import {
+  memoryRepository,
+  memoryContextRepository,
+  memoryTagRepository,
+  memoryPeopleRepository,
+  memoryLabelRepository,
+  labelRepository,
+} from '../db/repositories';
 import { storageService } from '../services/storage/storageService';
 import { memoryPipeline } from '../services/pipeline/memoryPipeline';
 import { logger } from '../utils/logger';
 import { ValidationError, NotFoundError } from '../utils/errors';
-import { Modality } from '../types';
+import { Modality, MemorySourceEnum, MediaType, ProcessingStatus, TagOrigin } from '../types';
 import { AuthRequest } from '../middleware/auth';
 
 export class MemoriesController {
   /**
    * POST /api/memories/upload
-   * Upload and process a new memory (voice or image)
+   * Upload and process a new memory (voice or image). Creates memory row (pending) then runs pipeline.
    */
   async upload(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const file = req.file;
       const modality = req.body.modality as Modality;
-      const recordedAt = req.body.recordedAt
+      const capturedAt = req.body.recordedAt
         ? new Date(req.body.recordedAt)
         : new Date();
       
-      // Parse optional metadata
       const metadata: Record<string, any> = {};
-      
-      if (req.body.latitude) {
-        metadata.latitude = parseFloat(req.body.latitude);
-      }
-      if (req.body.longitude) {
-        metadata.longitude = parseFloat(req.body.longitude);
-      }
-      if (req.body.locationName) {
-        metadata.locationName = req.body.locationName;
-      }
+      if (req.body.latitude) metadata.latitude = parseFloat(req.body.latitude);
+      if (req.body.longitude) metadata.longitude = parseFloat(req.body.longitude);
+      if (req.body.locationName) metadata.locationName = req.body.locationName;
       
       logger.info('Memory upload request', {
         modality,
@@ -46,29 +45,26 @@ export class MemoriesController {
         metadata,
       });
       
-      // Step 1: Store file
       const storedFile = await storageService.storeFile(file!, modality);
-      
-      // Add file metadata
       metadata.originalFilename = storedFile.originalName;
       metadata.fileSize = storedFile.size;
       metadata.mimeType = storedFile.mimeType;
       
-      // Step 2: Create memory source
       const userId = req.userId;
-      const memorySource = await memorySourceRepository.create({
-        modality,
+      const source = MemorySourceEnum.Upload;
+      const mediaType = modality === 'voice' ? MediaType.Audio : MediaType.Photo;
+      
+      const memory = await memoryRepository.create({
+        userId: userId ?? undefined,
+        capturedAt,
+        source,
+        mediaType,
         storagePath: storedFile.path,
-        metadata,
-        ...(userId && { userId }),
+        processingStatus: ProcessingStatus.Pending,
       });
       
-      // Step 3: Process memory (synchronous for Phase 2)
       const result = await memoryPipeline.processMemory({
-        memorySourceId: memorySource.id,
-        recordedAt,
-        modality,
-        storagePath: storedFile.path,
+        memoryId: memory.id,
         metadata,
         ...(userId && { userId }),
       });
@@ -91,48 +87,21 @@ export class MemoriesController {
   }
   
   /**
-   * GET /api/memories/sources/:sourceId
-   * Get memory source status
-   */
-  async getSourceStatus(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const { sourceId } = req.params;
-      
-      const source = await memorySourceRepository.findById(sourceId);
-      
-      // Try to get associated memory
-      const memory = await memoryRepository.findBySourceId(sourceId);
-      
-      res.json({
-        success: true,
-        data: {
-          source,
-          memory,
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-  
-  /**
-   * POST /api/memories/sources/:sourceId/retry
-   * Retry failed memory processing
+   * POST /api/memories/:id/retry
+   * Retry failed memory processing (by memory id)
    */
   async retryProcessing(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { sourceId } = req.params;
-      
-      logger.info('Retry processing request', { sourceId });
-      
-      const result = await memoryPipeline.retryFailedMemory(sourceId);
-      
+      const { id: memoryId } = req.params;
+      const memory = await memoryRepository.findById(memoryId);
+      if (req.userId != null && (memory.userId == null || memory.userId !== req.userId)) {
+        throw new NotFoundError('Memory', memoryId);
+      }
+      logger.info('Retry processing request', { memoryId });
+      const result = await memoryPipeline.retryFailedMemory(memoryId);
       res.json({
         success: true,
-        data: {
-          memory: result.memory,
-          processingTimeMs: result.processingTimeMs,
-        },
+        data: { memory: result.memory, processingTimeMs: result.processingTimeMs },
       });
     } catch (error) {
       next(error);
@@ -182,9 +151,8 @@ export class MemoriesController {
         }
       }
 
-      const source = await memorySourceRepository.findById(memory.memorySourceId);
-      const buffer = await storageService.readFile(source.storagePath);
-      const ext = path.extname(source.storagePath).toLowerCase();
+      const buffer = await storageService.readFile(memory.storagePath);
+      const ext = path.extname(memory.storagePath).toLowerCase();
       const mimeByExt: Record<string, string> = {
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
@@ -197,7 +165,7 @@ export class MemoriesController {
         '.wav': 'audio/wav',
         '.webm': 'audio/webm',
       };
-      const contentType = mimeByExt[ext] ?? (source.metadata?.mimeType as string) ?? 'application/octet-stream';
+      const contentType = mimeByExt[ext] ?? 'application/octet-stream';
       res.setHeader('Content-Type', contentType);
       res.setHeader('Cache-Control', 'private, max-age=300');
       res.send(buffer);
@@ -297,13 +265,168 @@ export class MemoriesController {
   async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params;
-      
       const memory = await memoryRepository.findById(id);
-      
+      if (req.userId != null && (memory.userId == null || memory.userId !== req.userId)) {
+        throw new NotFoundError('Memory', id);
+      }
+      res.json({
+        success: true,
+        data: { memory },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/memories/:id/context
+   * Return context (user_note, place), tags (ai + user with confidence), people (with confirmed).
+   */
+  async getContext(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id: memoryId } = req.params;
+      const memory = await memoryRepository.findById(memoryId);
+      if (req.userId != null && (memory.userId == null || memory.userId !== req.userId)) {
+        throw new NotFoundError('Memory', memoryId);
+      }
+      const [context, tags, people] = await Promise.all([
+        memoryContextRepository.findByMemoryId(memoryId),
+        memoryTagRepository.findByMemoryId(memoryId),
+        memoryPeopleRepository.findByMemoryId(memoryId),
+      ]);
       res.json({
         success: true,
         data: {
-          memory,
+          context: context
+            ? {
+                userNote: context.userNote,
+                locationName: context.locationName,
+                latitude: context.latitude,
+                longitude: context.longitude,
+                confirmed: context.confirmed,
+              }
+            : null,
+          tags: tags.map((t) => ({ tag: t.tag, confidence: t.confidence, origin: t.origin })),
+          people: people.map((p) => ({ personName: p.personName, confidence: p.confidence, confirmed: p.confirmed })),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/memories/:id/context
+   * Update context: user_note, location, add tags (user), add/confirm people.
+   */
+  async updateContext(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = req.userId!;
+      const { id: memoryId } = req.params;
+      const memory = await memoryRepository.findById(memoryId);
+      if (memory.userId == null || memory.userId !== userId) {
+        throw new NotFoundError('Memory', memoryId);
+      }
+      const body = req.body as {
+        userNote?: string;
+        locationName?: string;
+        latitude?: number;
+        longitude?: number;
+        tags?: string[];
+        people?: string[];
+      };
+      const hasContext = body.userNote !== undefined || body.locationName !== undefined || body.latitude !== undefined || body.longitude !== undefined;
+      if (hasContext) {
+        await memoryContextRepository.upsert({
+          memoryId,
+          userNote: body.userNote,
+          locationName: body.locationName,
+          latitude: body.latitude,
+          longitude: body.longitude,
+          confirmed: true,
+        });
+      }
+      if (Array.isArray(body.tags)) {
+        const existing = await memoryTagRepository.findByMemoryId(memoryId);
+        const toKeep = new Set(existing.filter((t) => t.origin === 'ai').map((t) => t.tag));
+        const userTags = body.tags.filter((t) => t?.trim());
+        for (const tag of userTags) {
+          if (!toKeep.has(tag)) await memoryTagRepository.create({ memoryId, tag: tag.trim(), origin: TagOrigin.User });
+        }
+      }
+      if (Array.isArray(body.people)) {
+        for (const name of body.people) {
+          if (!name?.trim()) continue;
+          await memoryPeopleRepository.create({
+            memoryId,
+            personName: name.trim(),
+            confirmed: true,
+          });
+        }
+      }
+      const [context, tags, people] = await Promise.all([
+        memoryContextRepository.findByMemoryId(memoryId),
+        memoryTagRepository.findByMemoryId(memoryId),
+        memoryPeopleRepository.findByMemoryId(memoryId),
+      ]);
+      res.json({
+        success: true,
+        data: {
+          context: context ? { userNote: context.userNote, locationName: context.locationName, latitude: context.latitude, longitude: context.longitude, confirmed: context.confirmed } : null,
+          tags: tags.map((t) => ({ tag: t.tag, confidence: t.confidence, origin: t.origin })),
+          people: people.map((p) => ({ personName: p.personName, confidence: p.confidence, confirmed: p.confirmed })),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/memories/:id/confirm-ai
+   * Convert AI suggestions into confirmed. Body: { place?: boolean, people?: string[], tags?: string[] }
+   */
+  async confirmAi(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = req.userId!;
+      const { id: memoryId } = req.params;
+      const memory = await memoryRepository.findById(memoryId);
+      if (memory.userId == null || memory.userId !== userId) {
+        throw new NotFoundError('Memory', memoryId);
+      }
+      const body = req.body as { place?: boolean; people?: string[]; tags?: string[] };
+      if (body.place === true) {
+        const ctx = await memoryContextRepository.findByMemoryId(memoryId);
+        if (ctx) await memoryContextRepository.update(memoryId, { confirmed: true });
+      }
+      if (Array.isArray(body.people)) {
+        for (const name of body.people) {
+          if (!name?.trim()) continue;
+          await memoryPeopleRepository.setConfirmed(memoryId, name.trim(), true);
+        }
+      }
+      if (Array.isArray(body.tags)) {
+        const existing = await memoryTagRepository.findByMemoryId(memoryId);
+        for (const tag of body.tags) {
+          if (!tag?.trim()) continue;
+          const found = existing.find((t) => t.tag.toLowerCase() === tag.trim().toLowerCase());
+          if (found) {
+            await memoryTagRepository.deleteByMemoryIdAndTag(memoryId, found.tag);
+            await memoryTagRepository.create({ memoryId, tag: found.tag, origin: TagOrigin.User });
+          }
+        }
+      }
+      const [context, tags, people] = await Promise.all([
+        memoryContextRepository.findByMemoryId(memoryId),
+        memoryTagRepository.findByMemoryId(memoryId),
+        memoryPeopleRepository.findByMemoryId(memoryId),
+      ]);
+      res.json({
+        success: true,
+        data: {
+          context: context ? { userNote: context.userNote, locationName: context.locationName, latitude: context.latitude, longitude: context.longitude, confirmed: context.confirmed } : null,
+          tags: tags.map((t) => ({ tag: t.tag, confidence: t.confidence, origin: t.origin })),
+          people: people.map((p) => ({ personName: p.personName, confidence: p.confidence, confirmed: p.confirmed })),
         },
       });
     } catch (error) {

@@ -110,7 +110,7 @@ Assistant: "Yes, you met with John for a project meeting where you discussed the
             .map(m => {
               const labels = labelsByMemoryId.get(m.id) ?? [];
               const tag = labels.length > 0 ? `[${labels.map(l => l.name).join(', ')}] ` : '';
-              return `  - ${tag}${m.normalizedText}`;
+              return `  - ${tag}${m.transcript || ''}`;
             })
             .join('\n');
           

@@ -64,9 +64,9 @@ Rules:
         // Build memory context
         const memoryContext = memories
           .map((m, i) => {
-            const time = m.recordedAt.toLocaleString();
+            const time = m.capturedAt.toLocaleString();
             const location = m.locationName ? ` at ${m.locationName}` : '';
-            const text = m.normalizedText || m.rawText;
+            const text = m.transcript || '';
             return `[Memory ${i + 1}] ${time}${location}\n${text}`;
           })
           .join('\n\n');
@@ -168,7 +168,7 @@ CONFIDENCE: [score here]`;
       return 'Untitled Event';
     }
     
-    const date = memories[0].recordedAt;
+    const date = memories[0].capturedAt;
     const timeStr = date.toLocaleTimeString('en-US', { 
       hour: 'numeric', 
       minute: '2-digit',

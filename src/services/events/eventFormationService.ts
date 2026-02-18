@@ -36,10 +36,10 @@ export class EventFormationService {
    */
   async processMemory(memoryId: string): Promise<FormationResult | null> {
     try {
-      const memory = await memoryRepository.findById(memoryId);
+      const memory = await memoryRepository.findByIdWithContext(memoryId);
       
-      // Find nearby memories
-      const recentMemories = await memoryRepository.listRecent(100);
+      // Find nearby memories (with context for location-aware clustering)
+      const recentMemories = await memoryRepository.listRecentWithContext(100);
       const nearbyMemories = await eventClusteringService.findNearbyMemories(
         memory,
         recentMemories
@@ -98,7 +98,7 @@ export class EventFormationService {
       });
       
       // Calculate event time bounds
-      const times = memories.map(m => m.recordedAt);
+      const times = memories.map(m => m.capturedAt);
       const startTime = new Date(Math.min(...times.map(t => t.getTime())));
       const endTime = new Date(Math.max(...times.map(t => t.getTime())));
       
@@ -227,7 +227,7 @@ export class EventFormationService {
         
         // Update event time bounds
         const allMemories = allClusterMemories;
-        const times = allMemories.map(m => m.recordedAt);
+        const times = allMemories.map(m => m.capturedAt);
         const startTime = new Date(Math.min(...times.map(t => t.getTime())));
         const endTime = new Date(Math.max(...times.map(t => t.getTime())));
         
