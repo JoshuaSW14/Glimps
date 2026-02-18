@@ -49,8 +49,10 @@ export class MemoryRepository {
     try {
       const result = await db.query<MemoryRow>(query, values);
       return mapMemoryRow(result.rows[0]);
-    } catch (error) {
-      throw new DatabaseError('Failed to create memory', { error });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const code = error && typeof error === 'object' && 'code' in error ? (error as { code: string }).code : undefined;
+      throw new DatabaseError(`Failed to create memory: ${msg}`, { error, code });
     }
   }
 

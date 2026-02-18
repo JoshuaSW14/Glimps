@@ -8,9 +8,11 @@ import { signedUrlService } from '../services/storage/signedUrlService';
 import { storageService } from '../services/storage/storageService';
 import { memoryRepository } from '../db/repositories';
 import { memoryPipeline } from '../services/pipeline/memoryPipeline';
+import { getPool } from '../db';
 import { logger } from '../utils/logger';
 import { ValidationError } from '../utils/errors';
 import { AuthRequest } from '../middleware/auth';
+import { serializeMemory } from '../utils/serializeMemory';
 import { Modality, MemorySourceEnum, MediaType, ProcessingStatus } from '../types';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -98,8 +100,22 @@ export class UploadController {
       const capturedAt = new Date();
       const mediaType = modality === 'voice' ? MediaType.Audio : MediaType.Photo;
 
+      // Only link memory to user if they exist in DB (avoids FK violation if users table was reset)
+      let effectiveUserId: string | undefined = userId;
+      try {
+        const pool = getPool();
+        const userCheck = await pool.query('SELECT 1 FROM users WHERE id = $1', [userId]);
+        if (userCheck.rows.length === 0) {
+          logger.warn('Signed upload: user not found in users table, creating memory without user_id', { userId });
+          effectiveUserId = undefined;
+        }
+      } catch (err) {
+        logger.warn('Signed upload: could not verify user, creating memory without user_id', { userId, err });
+        effectiveUserId = undefined;
+      }
+
       const memory = await memoryRepository.create({
-        userId,
+        userId: effectiveUserId,
         capturedAt,
         source: MemorySourceEnum.Upload,
         mediaType,
@@ -122,7 +138,7 @@ export class UploadController {
       res.status(201).json({
         success: true,
         data: {
-          memory: result.memory,
+          memory: serializeMemory(result.memory),
           processingTimeMs: result.processingTimeMs,
         },
       });
