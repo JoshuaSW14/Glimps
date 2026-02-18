@@ -327,7 +327,17 @@ export class MemoriesController {
     try {
       const userId = req.userId!;
       const { id: memoryId } = req.params;
-      const memory = await memoryRepository.findById(memoryId);
+      let memory: Awaited<ReturnType<typeof memoryRepository.findById>>;
+      try {
+        memory = await memoryRepository.findById(memoryId);
+      } catch (err) {
+        if (err instanceof NotFoundError && err.message.includes(memoryId)) {
+          await new Promise((r) => setTimeout(r, 800));
+          memory = await memoryRepository.findById(memoryId);
+        } else {
+          throw err;
+        }
+      }
       if (memory.userId == null || memory.userId !== userId) {
         throw new NotFoundError('Memory', memoryId);
       }
