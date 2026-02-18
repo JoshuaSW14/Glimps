@@ -55,6 +55,12 @@ export class MemoriesController {
       const source = MemorySourceEnum.Upload;
       const mediaType = modality === 'voice' ? MediaType.Audio : MediaType.Photo;
       
+      console.log('userId', userId);
+      console.log('capturedAt', capturedAt);
+      console.log('source', source);
+      console.log('mediaType', mediaType);
+      console.log('storagePath', storedFile.path);
+      console.log('processingStatus', ProcessingStatus.Pending);
       const memory = await memoryRepository.create({
         userId: userId ?? undefined,
         capturedAt,
