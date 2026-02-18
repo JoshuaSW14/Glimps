@@ -50,9 +50,14 @@ export class MemoryRepository {
       const result = await db.query<MemoryRow>(query, values);
       return mapMemoryRow(result.rows[0]);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      const code = error && typeof error === 'object' && 'code' in error ? (error as { code: string }).code : undefined;
-      throw new DatabaseError(`Failed to create memory: ${msg}`, { error, code });
+      const pg = error && typeof error === 'object' ? (error as { message?: string; code?: string; detail?: string; column?: string }) : {};
+      const msg = pg.message ?? (error instanceof Error ? error.message : String(error));
+      const parts = [msg];
+      if (pg.code) parts.push(`code=${pg.code}`);
+      if (pg.detail) parts.push(pg.detail);
+      if (pg.column) parts.push(`column=${pg.column}`);
+      const fullMessage = parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(', ')})` : parts[0];
+      throw new DatabaseError(`Failed to create memory: ${fullMessage}`, { error, code: pg.code });
     }
   }
 

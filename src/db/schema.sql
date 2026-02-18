@@ -39,7 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
 -- MEMORIES (semantic memory graph)
 -- ============================================================================
 
-CREATE TABLE memories (
+CREATE TABLE IF NOT EXISTS memories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -52,15 +52,15 @@ CREATE TABLE memories (
     processing_status processing_status_enum NOT NULL DEFAULT 'pending'
 );
 
-CREATE INDEX idx_memories_user_id ON memories(user_id);
-CREATE INDEX idx_memories_captured_at ON memories(captured_at DESC);
-CREATE INDEX idx_memories_created_at ON memories(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
+CREATE INDEX IF NOT EXISTS idx_memories_captured_at ON memories(captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at DESC);
 
 -- ============================================================================
 -- MEMORY_CONTEXT (1:1 with memory)
 -- ============================================================================
 
-CREATE TABLE memory_context (
+CREATE TABLE IF NOT EXISTS memory_context (
     memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
     user_note TEXT,
     location_name TEXT,
@@ -75,7 +75,7 @@ CREATE INDEX idx_memory_context_memory_id ON memory_context(memory_id);
 -- MEMORY_TAGS
 -- ============================================================================
 
-CREATE TABLE memory_tags (
+CREATE TABLE IF NOT EXISTS memory_tags (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
     tag TEXT NOT NULL,
@@ -90,7 +90,7 @@ CREATE INDEX idx_memory_tags_tag ON memory_tags(tag);
 -- MEMORY_PEOPLE
 -- ============================================================================
 
-CREATE TABLE memory_people (
+CREATE TABLE IF NOT EXISTS memory_people (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
     person_name TEXT NOT NULL,
@@ -105,7 +105,7 @@ CREATE INDEX idx_memory_people_person_name ON memory_people(person_name);
 -- MEMORY_EMBEDDINGS
 -- ============================================================================
 
-CREATE TABLE memory_embeddings (
+CREATE TABLE IF NOT EXISTS memory_embeddings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
     embedding vector(2000) NOT NULL,
