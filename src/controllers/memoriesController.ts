@@ -17,6 +17,7 @@ import { storageService } from '../services/storage/storageService';
 import { memoryPipeline } from '../services/pipeline/memoryPipeline';
 import { logger } from '../utils/logger';
 import { ValidationError, NotFoundError } from '../utils/errors';
+import { serializeMemory } from '../utils/serializeMemory';
 import { Modality, MemorySourceEnum, MediaType, ProcessingStatus, TagOrigin } from '../types';
 import { AuthRequest } from '../middleware/auth';
 
@@ -77,7 +78,7 @@ export class MemoriesController {
       res.status(201).json({
         success: true,
         data: {
-          memory: result.memory,
+          memory: serializeMemory(result.memory),
           processingTimeMs: result.processingTimeMs,
         },
       });
@@ -101,7 +102,10 @@ export class MemoriesController {
       const result = await memoryPipeline.retryFailedMemory(memoryId);
       res.json({
         success: true,
-        data: { memory: result.memory, processingTimeMs: result.processingTimeMs },
+        data: {
+          memory: serializeMemory(result.memory),
+          processingTimeMs: result.processingTimeMs,
+        },
       });
     } catch (error) {
       next(error);
@@ -110,7 +114,7 @@ export class MemoriesController {
   
   /**
    * GET /api/memories
-   * List recent memories
+   * List recent memories (with context so location is included when present)
    */
   async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -122,12 +126,12 @@ export class MemoriesController {
         throw new ValidationError('Limit must be between 1 and 100');
       }
       
-      const memories = await memoryRepository.listRecent(limit, req.userId);
+      const memories = await memoryRepository.listRecentWithContext(limit, req.userId);
       
       res.json({
         success: true,
         data: {
-          memories,
+          memories: memories.map(serializeMemory),
           count: memories.length,
         },
       });
@@ -265,13 +269,13 @@ export class MemoriesController {
   async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params;
-      const memory = await memoryRepository.findById(id);
+      const memory = await memoryRepository.findByIdWithContext(id);
       if (req.userId != null && (memory.userId == null || memory.userId !== req.userId)) {
         throw new NotFoundError('Memory', id);
       }
       res.json({
         success: true,
-        data: { memory },
+        data: { memory: serializeMemory(memory) },
       });
     } catch (error) {
       next(error);
