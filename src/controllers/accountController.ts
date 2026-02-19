@@ -7,6 +7,7 @@ import { Response, NextFunction } from 'express';
 import { withTransaction } from '../db';
 import { memoryRepository, eventRepository } from '../db/repositories';
 import { AuthRequest } from '../middleware/auth';
+import { ValidationError } from '../utils/errors';
 
 export class AccountController {
   /**
@@ -17,15 +18,14 @@ export class AccountController {
     try {
       const userId = req.userId;
       if (!userId) {
-        res.status(401).json({ success: false, error: 'Unauthorized' });
-        return;
+        return next(new ValidationError('User not authenticated'));
       }
 
       await withTransaction(async (client) => {
         await client.query('DELETE FROM users WHERE id = $1', [userId]);
       });
 
-      res.json({ success: true, message: 'Account deleted' });
+      res.json({ ok: true, data: { deleted: true } });
     } catch (error) {
       next(error);
     }
@@ -39,15 +39,14 @@ export class AccountController {
     try {
       const userId = req.userId;
       if (!userId) {
-        res.status(401).json({ success: false, error: 'Unauthorized' });
-        return;
+        return next(new ValidationError('User not authenticated'));
       }
 
       const memories = await memoryRepository.listRecent(10000, userId);
       const events = await eventRepository.listRecent(10000, userId);
 
       res.json({
-        success: true,
+        ok: true,
         data: {
           user: { id: userId },
           memories,

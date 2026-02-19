@@ -33,9 +33,13 @@ export class LabelRepository {
     return result.rows.map(mapLabelRow);
   }
 
-  async findById(id: string): Promise<Label> {
+  /** SECURITY: Always requires userId — returns NotFoundError for wrong owner. */
+  async findById(id: string, userId: string): Promise<Label> {
     const db = getPool();
-    const result = await db.query<LabelRow>('SELECT * FROM labels WHERE id = $1', [id]);
+    const result = await db.query<LabelRow>(
+      'SELECT * FROM labels WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
     if (result.rows.length === 0) {
       throw new NotFoundError('Label', id);
     }
@@ -56,7 +60,7 @@ export class LabelRepository {
       values.push(data.kind);
     }
     if (updates.length === 0) {
-      return this.findById(id);
+      return this.findById(id, userId);
     }
     values.push(id, userId);
     const query = `

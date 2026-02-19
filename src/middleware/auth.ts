@@ -18,7 +18,7 @@ export function requireAuth(
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Unauthorized' });
+    res.status(401).json({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Bearer token required' } });
     return;
   }
 
@@ -29,6 +29,6 @@ export function requireAuth(
     req.userId = payload.userId;
     next();
   } catch {
-    res.status(401).json({ error: 'Invalid token' });
+    res.status(401).json({ ok: false, error: { code: 'INVALID_TOKEN', message: 'Invalid or expired token' } });
   }
 }

@@ -66,7 +66,7 @@ export class EventRetrievalService {
     query: string,
     limit: number = 10,
     filters: EventSearchFilters = {},
-    userId?: string
+    userId: string
   ): Promise<EventRetrievalResult> {
     const startTime = Date.now();
     
@@ -94,11 +94,10 @@ export class EventRetrievalService {
       // Generate query embedding
       const queryEmbedding = await embeddingService.generateEmbedding(query);
       
-      // Search for similar events
+      // Search for similar events (always scoped to userId)
       const similarEvents = await eventEmbeddingRepository.findSimilar(
         queryEmbedding,
-        limit * 3, // Get more candidates for filtering and temporal sorting
-        undefined,
+        limit * 3,
         userId
       );
       
@@ -112,20 +111,18 @@ export class EventRetrievalService {
       
       for (const { eventId, distance } of similarEvents) {
         try {
-          const event = await eventRepository.findById(eventId);
-          
+          // Ownership enforced by findById with userId
+          const event = await eventRepository.findById(eventId, userId);
+
           // Apply filters
           if (!this.matchesFilters(event, enhancedFilters)) {
             continue;
           }
-          
-          // Get memories for this event
+
+          // Get memories for this event, scoped to userId
           const links = await memoryEventLinkRepository.findByEventId(eventId);
-          
-          // Fetch memories and organize by relationship type
-          const memories = await Promise.all(
-            links.map(link => memoryRepository.findById(link.memoryId))
-          );
+          const memoryIds = links.map((l) => l.memoryId);
+          const memories = await memoryRepository.findByIds(memoryIds, userId);
           
           const primaryMemory = this.findPrimaryMemory(links, memories);
           const supportingMemories = this.findMemoriesByType(

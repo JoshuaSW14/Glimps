@@ -11,7 +11,7 @@ import { contextInferenceService } from '../services/context/contextInferenceSer
 async function main() {
   getPool();
   const limit = 5000;
-  const memories = await memoryRepository.listRecent(limit);
+  const memories = await memoryRepository.listAllInternal(limit);
   console.log(`Running context inference for ${memories.length} memories...`);
   let done = 0;
   let err = 0;

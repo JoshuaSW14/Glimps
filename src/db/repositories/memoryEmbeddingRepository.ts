@@ -62,45 +62,28 @@ export class MemoryEmbeddingRepository {
   }
   
   /**
-   * Search for similar memories using vector similarity
-   * Returns memory IDs ordered by cosine similarity (most similar first)
+   * SECURITY: userId is required — always scopes to the authenticated user's memories.
+   * Returns memory IDs ordered by cosine similarity (most similar first).
    */
   async findSimilar(
     queryEmbedding: number[],
     limit: number = 10,
-    client?: PoolClient,
-    userId?: string
+    userId: string,
+    client?: PoolClient
   ): Promise<Array<{ memoryId: string; distance: number }>> {
     const db = client || getPool();
-    const byUser = userId != null;
-    const query = byUser
-      ? `
+    const query = `
       SELECT me.memory_id, me.embedding <=> $1::vector AS distance
       FROM memory_embeddings me
       INNER JOIN memories m ON m.id = me.memory_id AND m.user_id = $3
       ORDER BY me.embedding <=> $1::vector
-      LIMIT $2
-    `
-      : `
-      SELECT memory_id, embedding <=> $1::vector AS distance
-      FROM memory_embeddings
-      ORDER BY embedding <=> $1::vector
-      LIMIT $2
-    `;
-    const values = byUser
-      ? [formatVectorString(queryEmbedding), limit, userId]
-      : [formatVectorString(queryEmbedding), limit];
-    
+      LIMIT $2`;
     try {
       const result = await db.query<{ memory_id: string; distance: number }>(
         query,
-        values
+        [formatVectorString(queryEmbedding), limit, userId]
       );
-      
-      return result.rows.map(row => ({
-        memoryId: row.memory_id,
-        distance: row.distance,
-      }));
+      return result.rows.map(row => ({ memoryId: row.memory_id, distance: row.distance }));
     } catch (error) {
       throw new DatabaseError('Failed to search similar memories', { error });
     }

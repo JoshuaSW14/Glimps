@@ -97,45 +97,28 @@ export class EventEmbeddingRepository {
   }
   
   /**
-   * Search for similar events using vector similarity
-   * Returns event IDs ordered by cosine similarity (most similar first)
+   * SECURITY: userId is required — always scopes to the authenticated user's events.
+   * Returns event IDs ordered by cosine similarity (most similar first).
    */
   async findSimilar(
     queryEmbedding: number[],
     limit: number = 10,
-    client?: PoolClient,
-    userId?: string
+    userId: string,
+    client?: PoolClient
   ): Promise<Array<{ eventId: string; distance: number }>> {
     const db = client || getPool();
-    const byUser = userId != null;
-    const query = byUser
-      ? `
+    const query = `
       SELECT ee.event_id, ee.embedding <=> $1::vector AS distance
       FROM event_embeddings ee
       INNER JOIN events e ON e.id = ee.event_id AND e.user_id = $3
       ORDER BY ee.embedding <=> $1::vector
-      LIMIT $2
-    `
-      : `
-      SELECT event_id, embedding <=> $1::vector AS distance
-      FROM event_embeddings
-      ORDER BY embedding <=> $1::vector
-      LIMIT $2
-    `;
-    const values = byUser
-      ? [formatVectorString(queryEmbedding), limit, userId]
-      : [formatVectorString(queryEmbedding), limit];
-    
+      LIMIT $2`;
     try {
       const result = await db.query<{ event_id: string; distance: number }>(
         query,
-        values
+        [formatVectorString(queryEmbedding), limit, userId]
       );
-      
-      return result.rows.map(row => ({
-        eventId: row.event_id,
-        distance: row.distance,
-      }));
+      return result.rows.map(row => ({ eventId: row.event_id, distance: row.distance }));
     } catch (error) {
       throw new DatabaseError('Failed to search similar events', { error });
     }

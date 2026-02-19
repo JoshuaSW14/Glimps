@@ -43,7 +43,7 @@ export class RetrievalService {
   async search(
     query: string,
     filters: SearchFilters = {},
-    userId?: string
+    userId: string
   ): Promise<RetrievalResult> {
     const startTime = Date.now();
     const limit = filters.limit || 10;
@@ -56,7 +56,6 @@ export class RetrievalService {
       const similar = await memoryEmbeddingRepository.findSimilar(
         queryEmbedding,
         candidateLimit,
-        undefined,
         userId
       );
 
@@ -72,7 +71,7 @@ export class RetrievalService {
 
       const memoryIds = similar.map((s) => s.memoryId);
       const [memories, contextMap, tagsMap, peopleMap] = await Promise.all([
-        memoryRepository.findByIds(memoryIds),
+        memoryRepository.findByIds(memoryIds, userId),
         memoryContextRepository.findByMemoryIds(memoryIds),
         memoryTagRepository.findByMemoryIds(memoryIds),
         memoryPeopleRepository.findByMemoryIds(memoryIds),

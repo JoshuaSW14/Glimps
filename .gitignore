@@ -27,3 +27,6 @@ dist-ssr
 config.local.json
 secrets.json
 
+
+/storage/uploads*
+

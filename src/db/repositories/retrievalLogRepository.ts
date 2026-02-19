@@ -1,6 +1,6 @@
 /**
  * Retrieval Log Repository
- * Phase 4: Data access for retrieval_logs table
+ * SECURITY: userId is required on every write; reads are scoped to userId.
  */
 
 import { getPool } from '../index';
@@ -13,24 +13,18 @@ import {
 import { DatabaseError } from '../../utils/errors';
 
 export class RetrievalLogRepository {
-  /**
-   * Create a new retrieval log
-   */
   async create(input: CreateRetrievalLogInput): Promise<RetrievalLog> {
     const pool = getPool();
-    
     const query = `
-      INSERT INTO retrieval_logs (user_query, memory_ids, search_metadata)
-      VALUES ($1, $2, $3)
-      RETURNING *
-    `;
-    
+      INSERT INTO retrieval_logs (user_id, user_query, memory_ids, search_metadata)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *`;
     const values = [
+      input.userId,
       input.userQuery,
       input.memoryIds,
-      JSON.stringify(input.searchMetadata || {}),
+      JSON.stringify(input.searchMetadata ?? {}),
     ];
-    
     try {
       const result = await pool.query<RetrievalLogRow>(query, values);
       return mapRetrievalLogRow(result.rows[0]);
@@ -38,20 +32,13 @@ export class RetrievalLogRepository {
       throw new DatabaseError('Failed to create retrieval log', { error });
     }
   }
-  
-  /**
-   * List recent retrieval logs
-   */
-  async listRecent(limit: number = 20): Promise<RetrievalLog[]> {
+
+  async listRecent(userId: string, limit: number = 20): Promise<RetrievalLog[]> {
     const pool = getPool();
-    
-    const query = `
-      SELECT * FROM retrieval_logs
-      ORDER BY created_at DESC
-      LIMIT $1
-    `;
-    
-    const result = await pool.query<RetrievalLogRow>(query, [limit]);
+    const result = await pool.query<RetrievalLogRow>(
+      'SELECT * FROM retrieval_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2',
+      [userId, limit]
+    );
     return result.rows.map(mapRetrievalLogRow);
   }
 }

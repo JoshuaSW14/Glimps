@@ -6,13 +6,12 @@
 import { Response, NextFunction } from 'express';
 import { signedUrlService } from '../services/storage/signedUrlService';
 import { storageService } from '../services/storage/storageService';
-import { memoryRepository } from '../db/repositories';
+import { memoryRepository, memoryContextRepository } from '../db/repositories';
 import { memoryPipeline } from '../services/pipeline/memoryPipeline';
 import { logger } from '../utils/logger';
-import { ValidationError } from '../utils/errors';
+import { ValidationError, DatabaseError } from '../utils/errors';
 import { AuthRequest } from '../middleware/auth';
 import { serializeMemory } from '../utils/serializeMemory';
-import { DatabaseError } from '../utils/errors';
 import { Modality, MemorySourceEnum, MediaType, ProcessingStatus } from '../types';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,7 +36,7 @@ export class UploadController {
       const uploadUrl = `/api/upload/signed?fileKey=${encodeURIComponent(data.fileKey)}&signature=${data.signature}&expires=${data.expiresAt}`;
 
       res.json({
-        success: true,
+        ok: true,
         data: {
           uploadUrl,
           fileKey: data.fileKey,
@@ -51,8 +50,8 @@ export class UploadController {
 
   /**
    * POST /api/upload/signed
-   * Public (no auth). Query: fileKey, signature, expires. Body: multipart file.
-   * Verifies signature, stores file, creates memory source, runs pipeline.
+   * Public (no auth). Query: fileKey, signature, expires. Body: multipart file + optional metadata fields.
+   * Verifies signature, stores file, creates memory + context, runs pipeline.
    */
   async handleSignedUpload(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -68,7 +67,7 @@ export class UploadController {
         throw new ValidationError('Invalid expires');
       }
       if (!signedUrlService.verify(fileKey, signature, expires)) {
-        res.status(403).json({ success: false, error: 'Invalid or expired upload link' });
+        res.status(403).json({ ok: false, error: { code: 'INVALID_UPLOAD_LINK', message: 'Invalid or expired upload link' } });
         return;
       }
 
@@ -82,6 +81,18 @@ export class UploadController {
         throw new ValidationError('Invalid fileKey');
       }
 
+      // Parse metadata from multipart body fields
+      const capturedAtRaw = req.body.capturedAt as string | undefined;
+      const capturedAt = capturedAtRaw ? new Date(capturedAtRaw) : new Date();
+      const latitude = req.body.latitude != null ? parseFloat(req.body.latitude) : undefined;
+      const longitude = req.body.longitude != null ? parseFloat(req.body.longitude) : undefined;
+      const locationName = req.body.locationName as string | undefined;
+      const notesRaw = req.body.notes;
+      const notes = typeof notesRaw === 'string' ? notesRaw.trim() : undefined;
+      if (notes && notes.length > 500) {
+        throw new ValidationError('notes must be 500 characters or fewer');
+      }
+
       const ext = fileKey.split('.').pop()?.toLowerCase() || '';
       const voiceExts = ['m4a', 'mp4', 'mp3', 'wav', 'webm'];
       const modality: Modality = voiceExts.includes(ext) ? ('voice' as Modality) : ('image' as Modality);
@@ -92,15 +103,14 @@ export class UploadController {
         file.mimetype
       );
 
-      const metadata: Record<string, unknown> = {
+      const fileMetadata: Record<string, unknown> = {
         originalFilename: file.originalname,
         fileSize: file.size,
         mimeType: file.mimetype,
       };
-      const capturedAt = new Date();
       const mediaType = modality === 'voice' ? MediaType.Audio : MediaType.Photo;
 
-      // Try with userId first so the memory is owned and findable by the user. Only omit on FK violation.
+      // SECURITY: If the user doesn't exist in our DB, reject — no orphan memories.
       let memory: Awaited<ReturnType<typeof memoryRepository.create>>;
       try {
         memory = await memoryRepository.create({
@@ -114,37 +124,52 @@ export class UploadController {
       } catch (err) {
         const code = err instanceof DatabaseError ? (err.details as { code?: string })?.code : undefined;
         if (code === '23503') {
-          logger.warn('Signed upload: user not in DB (FK), creating memory without user_id', { userId });
-          memory = await memoryRepository.create({
-            userId: undefined,
-            capturedAt,
-            source: MemorySourceEnum.Upload,
-            mediaType,
-            storagePath: storedFile.path,
-            processingStatus: ProcessingStatus.Pending,
-          });
-        } else {
-          throw err;
+          logger.warn('Signed upload rejected: user not found in DB', { userId });
+          res.status(403).json({ ok: false, error: { code: 'USER_NOT_FOUND', message: 'Upload user not recognized' } });
+          return;
         }
+        throw err;
       }
 
-      const result = await memoryPipeline.processMemory({
+      // Persist initial context before the pipeline runs so AI sees user notes immediately.
+      const hasLocation = latitude != null && longitude != null;
+      if (hasLocation || locationName || notes) {
+        await memoryContextRepository.upsert({
+          memoryId: memory.id,
+          userNote: notes || undefined,
+          latitude: hasLocation ? latitude : undefined,
+          longitude: hasLocation ? longitude : undefined,
+          locationName,
+          confirmed: true,
+        });
+      }
+
+      memoryPipeline.processMemory({
         memoryId: memory.id,
-        metadata,
+        metadata: {
+          ...fileMetadata,
+          latitude: hasLocation ? latitude : undefined,
+          longitude: hasLocation ? longitude : undefined,
+          locationName,
+        },
         userId,
+      }).catch((error) => {
+        logger.error('Async pipeline failed after signed upload', { error, memoryId: memory.id });
       });
 
-      logger.info('Signed upload completed', {
-        memoryId: result.memory.id,
+      logger.info('Signed upload accepted', {
+        memoryId: memory.id,
         fileKey,
-        processingTimeMs: result.processingTimeMs,
+        capturedAt,
+        hasLocation,
+        hasNotes: !!notes,
       });
 
       res.status(201).json({
-        success: true,
+        ok: true,
         data: {
-          memory: serializeMemory(result.memory),
-          processingTimeMs: result.processingTimeMs,
+          memory: serializeMemory(memory),
+          processingTimeMs: 0,
         },
       });
     } catch (error) {

@@ -1,6 +1,5 @@
 /**
  * Auth Routes
- * Production Hardening Phase 2: Apple / Google Sign In, refresh
  */
 
 import { Router } from 'express';
@@ -9,8 +8,14 @@ import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
-router.post('/apple', (req, res, next) => authController.appleSignIn(req, res, next));
-router.post('/google', (req, res, next) => authController.googleSignIn(req, res, next));
-router.post('/refresh', requireAuth, (req, res, next) => authController.refresh(req, res, next));
+// Unified provider login — verifies provider token server-side before issuing session token
+router.post('/login', (req, res, next) => authController.login(req, res, next));
+
+// Refresh an existing session token
+router.post('/refresh', requireAuth, (req, res, next) => authController.refresh(req as any, res, next));
+
+// Legacy endpoints — return 410 Gone so old clients fail clearly
+router.post('/apple',  (req, res) => authController.gone(req, res));
+router.post('/google', (req, res) => authController.gone(req, res));
 
 export default router;

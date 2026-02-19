@@ -24,6 +24,11 @@ export class ContextInferenceService {
    * For a given memory, find similar memories and infer place, people, tags. Store as AI suggestions (not confirmed).
    */
   async inferAndStoreContext(memoryId: string, userId: string | undefined): Promise<void> {
+    if (!userId) {
+      logger.debug('No userId for context inference, skipping', { memoryId });
+      return;
+    }
+
     const embedding = await memoryEmbeddingRepository.findByMemoryId(memoryId);
     if (!embedding) {
       logger.debug('No embedding for memory, skipping context inference', { memoryId });
@@ -33,8 +38,7 @@ export class ContextInferenceService {
     const similar = await memoryEmbeddingRepository.findSimilar(
       embedding.embedding,
       SIMILAR_MEMORIES_LIMIT + 1,
-      undefined,
-      userId ?? undefined
+      userId
     );
     const similarIds = similar
       .filter((s) => s.memoryId !== memoryId)

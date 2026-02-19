@@ -37,7 +37,11 @@ export class SignedUrlService {
   verify(fileKey: string, signature: string, expires: number): boolean {
     if (Date.now() > expires) return false;
     const expected = this.sign(fileKey, expires);
-    return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
+    const sigBuf = Buffer.from(signature, 'hex');
+    const expectedBuf = Buffer.from(expected, 'hex');
+    // timingSafeEqual requires equal-length buffers; mismatch length → invalid
+    if (sigBuf.length !== expectedBuf.length) return false;
+    return crypto.timingSafeEqual(sigBuf, expectedBuf);
   }
 
   private sign(fileKey: string, expiresAt: number): string {

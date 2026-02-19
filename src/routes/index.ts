@@ -38,7 +38,7 @@ router.use('/resurface', requireAuth, resurfacingRoutes);
 // Health check
 router.get('/health', (_req, res) => {
   res.json({
-    success: true,
+    ok: true,
     data: {
       status: 'healthy',
       timestamp: new Date().toISOString(),

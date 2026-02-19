@@ -19,10 +19,11 @@ export function errorHandler(
     path: req.path,
     body: req.body,
   });
-  
+
   // Handle known AppError types
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
+      ok: false,
       error: {
         code: err.code || 'ERROR',
         message: err.message,
@@ -31,9 +32,10 @@ export function errorHandler(
     });
     return;
   }
-  
+
   // Handle unknown errors
   res.status(500).json({
+    ok: false,
     error: {
       code: 'INTERNAL_SERVER_ERROR',
       message: 'An unexpected error occurred',

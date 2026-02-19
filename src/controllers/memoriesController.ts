@@ -1,6 +1,6 @@
 /**
  * Memories Controller
- * Phase 2: HTTP handlers for memory operations
+ * SECURITY: All repo calls pass userId — ownership is enforced at the DB layer.
  */
 
 import { Response, NextFunction } from 'express';
@@ -16,164 +16,103 @@ import {
 import { storageService } from '../services/storage/storageService';
 import { memoryPipeline } from '../services/pipeline/memoryPipeline';
 import { logger } from '../utils/logger';
-import { ValidationError, NotFoundError } from '../utils/errors';
+import { ValidationError } from '../utils/errors';
 import { serializeMemory } from '../utils/serializeMemory';
-import { Modality, MemorySourceEnum, MediaType, ProcessingStatus, TagOrigin } from '../types';
+import { MemorySourceEnum, MediaType, ProcessingStatus, TagOrigin, Modality } from '../types';
 import { AuthRequest } from '../middleware/auth';
 
 export class MemoriesController {
   /**
    * POST /api/memories/upload
-   * Upload and process a new memory (voice or image). Creates memory row (pending) then runs pipeline.
    */
   async upload(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.userId!;
       const file = req.file;
       const modality = req.body.modality as Modality;
-      const capturedAt = req.body.recordedAt
-        ? new Date(req.body.recordedAt)
-        : new Date();
-      
+      const capturedAt = req.body.recordedAt ? new Date(req.body.recordedAt) : new Date();
+
       const metadata: Record<string, any> = {};
       if (req.body.latitude) metadata.latitude = parseFloat(req.body.latitude);
       if (req.body.longitude) metadata.longitude = parseFloat(req.body.longitude);
       if (req.body.locationName) metadata.locationName = req.body.locationName;
-      
-      logger.info('Memory upload request', {
-        modality,
-        fileSize: file!.size,
-        originalName: file!.originalname,
-        metadata,
-      });
-      
+
+      logger.info('Memory upload request', { modality, fileSize: file!.size });
+
       const storedFile = await storageService.storeFile(file!, modality);
       metadata.originalFilename = storedFile.originalName;
       metadata.fileSize = storedFile.size;
       metadata.mimeType = storedFile.mimeType;
-      
-      const userId = req.userId;
-      const source = MemorySourceEnum.Upload;
+
       const mediaType = modality === 'voice' ? MediaType.Audio : MediaType.Photo;
-      
-      console.log('userId', userId);
-      console.log('capturedAt', capturedAt);
-      console.log('source', source);
-      console.log('mediaType', mediaType);
-      console.log('storagePath', storedFile.path);
-      console.log('processingStatus', ProcessingStatus.Pending);
       const memory = await memoryRepository.create({
-        userId: userId ?? undefined,
+        userId,
         capturedAt,
-        source,
+        source: MemorySourceEnum.Upload,
         mediaType,
         storagePath: storedFile.path,
         processingStatus: ProcessingStatus.Pending,
       });
-      
-      const result = await memoryPipeline.processMemory({
-        memoryId: memory.id,
-        metadata,
-        ...(userId && { userId }),
-      });
-      
-      logger.info('Memory upload completed', {
-        memoryId: result.memory.id,
-        processingTimeMs: result.processingTimeMs,
-      });
-      
-      res.status(201).json({
-        success: true,
-        data: {
-          memory: serializeMemory(result.memory),
-          processingTimeMs: result.processingTimeMs,
-        },
-      });
+
+      const result = await memoryPipeline.processMemory({ memoryId: memory.id, metadata, userId });
+
+      logger.info('Memory upload completed', { memoryId: result.memory.id });
+
+      res.status(201).json({ ok: true, data: { memory: serializeMemory(result.memory), processingTimeMs: result.processingTimeMs } });
     } catch (error) {
       next(error);
     }
   }
-  
+
   /**
    * POST /api/memories/:id/retry
-   * Retry failed memory processing (by memory id)
    */
   async retryProcessing(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.userId!;
       const { id: memoryId } = req.params;
-      const memory = await memoryRepository.findById(memoryId);
-      if (req.userId != null && (memory.userId == null || memory.userId !== req.userId)) {
-        throw new NotFoundError('Memory', memoryId);
-      }
+      // Ownership enforced by findById with userId
+      await memoryRepository.findById(memoryId, userId);
       logger.info('Retry processing request', { memoryId });
       const result = await memoryPipeline.retryFailedMemory(memoryId);
-      res.json({
-        success: true,
-        data: {
-          memory: serializeMemory(result.memory),
-          processingTimeMs: result.processingTimeMs,
-        },
-      });
+      res.json({ ok: true, data: { memory: serializeMemory(result.memory), processingTimeMs: result.processingTimeMs } });
     } catch (error) {
       next(error);
     }
   }
-  
+
   /**
    * GET /api/memories
-   * List recent memories (with context so location is included when present)
    */
   async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const limit = req.query.limit
-        ? parseInt(req.query.limit as string, 10)
-        : 20;
-      
-      if (limit < 1 || limit > 100) {
-        throw new ValidationError('Limit must be between 1 and 100');
-      }
-      
-      const memories = await memoryRepository.listRecentWithContext(limit, req.userId);
-      
-      res.json({
-        success: true,
-        data: {
-          memories: memories.map(serializeMemory),
-          count: memories.length,
-        },
-      });
+      const userId = req.userId!;
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
+      if (limit < 1 || limit > 100) throw new ValidationError('Limit must be between 1 and 100');
+      const memories = await memoryRepository.listRecentWithContext(limit, userId);
+      res.json({ ok: true, data: { memories: memories.map(serializeMemory), count: memories.length } });
     } catch (error) {
       next(error);
     }
   }
-  
+
   /**
    * GET /api/memories/:id/asset
-   * Stream the raw file (image or voice) for a memory. Auth required; user must own the memory.
    */
   async getAsset(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.userId!;
       const { id } = req.params;
-      const memory = await memoryRepository.findById(id);
-
-      if (req.userId != null) {
-        if (memory.userId == null || memory.userId !== req.userId) {
-          throw new NotFoundError('Memory', id);
-        }
-      }
+      // findById enforces ownership
+      const memory = await memoryRepository.findById(id, userId);
 
       const buffer = await storageService.readFile(memory.storagePath);
       const ext = path.extname(memory.storagePath).toLowerCase();
       const mimeByExt: Record<string, string> = {
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-        '.m4a': 'audio/mp4',
-        '.mp4': 'audio/mp4',
-        '.mp3': 'audio/mpeg',
-        '.wav': 'audio/wav',
-        '.webm': 'audio/webm',
+        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+        '.gif': 'image/gif', '.webp': 'image/webp',
+        '.m4a': 'audio/mp4', '.mp4': 'audio/mp4', '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav', '.webm': 'audio/webm',
       };
       const contentType = mimeByExt[ext] ?? 'application/octet-stream';
       res.setHeader('Content-Type', contentType);
@@ -186,23 +125,17 @@ export class MemoriesController {
 
   /**
    * GET /api/memories/:id/labels
-   * Get labels for a memory
    */
   async getMemoryLabels(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.userId!;
       const { id: memoryId } = req.params;
-      const memory = await memoryRepository.findById(memoryId);
-      if (req.userId != null && (memory.userId == null || memory.userId !== req.userId)) {
-        throw new NotFoundError('Memory', memoryId);
-      }
+      await memoryRepository.findById(memoryId, userId); // ownership check
       const labelIds = await memoryLabelRepository.getLabelIdsByMemoryId(memoryId);
       const labels = await Promise.all(
-        labelIds.map((lid) => labelRepository.findById(lid).catch(() => null))
+        labelIds.map((lid) => labelRepository.findById(lid, userId).catch(() => null))
       ).then((list) => list.filter(Boolean));
-      res.json({
-        success: true,
-        data: { labels },
-      });
+      res.json({ ok: true, data: { labels } });
     } catch (error) {
       next(error);
     }
@@ -210,33 +143,22 @@ export class MemoriesController {
 
   /**
    * POST /api/memories/:id/labels
-   * Add a label to a memory (body: { labelId })
    */
   async addLabelToMemory(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = req.userId!;
       const { id: memoryId } = req.params;
       const { labelId } = req.body;
-      if (!labelId) {
-        throw new ValidationError('labelId is required');
-      }
-      const memory = await memoryRepository.findById(memoryId);
-      if (memory.userId != null && memory.userId !== userId) {
-        throw new NotFoundError('Memory', memoryId);
-      }
-      const label = await labelRepository.findById(labelId);
-      if (label.userId !== userId) {
-        throw new NotFoundError('Label', labelId);
-      }
+      if (!labelId) throw new ValidationError('labelId is required');
+      // Both ownership checks happen in the repos
+      await memoryRepository.findById(memoryId, userId);
+      await labelRepository.findById(labelId, userId);
       await memoryLabelRepository.addLabelToMemory(memoryId, labelId);
       const labelIds = await memoryLabelRepository.getLabelIdsByMemoryId(memoryId);
       const labels = await Promise.all(
-        labelIds.map((lid) => labelRepository.findById(lid).catch(() => null))
+        labelIds.map((lid) => labelRepository.findById(lid, userId).catch(() => null))
       ).then((list) => list.filter(Boolean));
-      res.status(201).json({
-        success: true,
-        data: { labels },
-      });
+      res.status(201).json({ ok: true, data: { labels } });
     } catch (error) {
       next(error);
     }
@@ -244,25 +166,15 @@ export class MemoriesController {
 
   /**
    * DELETE /api/memories/:id/labels/:labelId
-   * Remove a label from a memory
    */
   async removeLabelFromMemory(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = req.userId!;
       const { id: memoryId, labelId } = req.params;
-      const memory = await memoryRepository.findById(memoryId);
-      if (memory.userId != null && memory.userId !== userId) {
-        throw new NotFoundError('Memory', memoryId);
-      }
-      const label = await labelRepository.findById(labelId);
-      if (label.userId !== userId) {
-        throw new NotFoundError('Label', labelId);
-      }
+      await memoryRepository.findById(memoryId, userId);
+      await labelRepository.findById(labelId, userId);
       await memoryLabelRepository.removeLabelFromMemory(memoryId, labelId);
-      res.json({
-        success: true,
-        data: { removed: true },
-      });
+      res.json({ ok: true, data: { removed: true } });
     } catch (error) {
       next(error);
     }
@@ -270,19 +182,13 @@ export class MemoriesController {
 
   /**
    * GET /api/memories/:id
-   * Get memory by ID
    */
   async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.userId!;
       const { id } = req.params;
-      const memory = await memoryRepository.findByIdWithContext(id);
-      if (req.userId != null && (memory.userId == null || memory.userId !== req.userId)) {
-        throw new NotFoundError('Memory', id);
-      }
-      res.json({
-        success: true,
-        data: { memory: serializeMemory(memory) },
-      });
+      const memory = await memoryRepository.findByIdWithContext(id, userId);
+      res.json({ ok: true, data: { memory: serializeMemory(memory) } });
     } catch (error) {
       next(error);
     }
@@ -290,31 +196,34 @@ export class MemoriesController {
 
   /**
    * GET /api/memories/:id/context
-   * Return context (user_note, place), tags (ai + user with confidence), people (with confirmed).
    */
   async getContext(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.userId!;
       const { id: memoryId } = req.params;
-      const memory = await memoryRepository.findById(memoryId);
-      if (req.userId != null && (memory.userId == null || memory.userId !== req.userId)) {
-        throw new NotFoundError('Memory', memoryId);
+      // Retry once on NotFound — pipeline may still be committing
+      let verified = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await memoryRepository.findById(memoryId, userId);
+          verified = true;
+          break;
+        } catch {
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
+          else throw new Error(`Memory ${memoryId} not found`);
+        }
       }
+      if (!verified) return;
       const [context, tags, people] = await Promise.all([
         memoryContextRepository.findByMemoryId(memoryId),
         memoryTagRepository.findByMemoryId(memoryId),
         memoryPeopleRepository.findByMemoryId(memoryId),
       ]);
       res.json({
-        success: true,
+        ok: true,
         data: {
           context: context
-            ? {
-                userNote: context.userNote,
-                locationName: context.locationName,
-                latitude: context.latitude,
-                longitude: context.longitude,
-                confirmed: context.confirmed,
-              }
+            ? { userNote: context.userNote, locationName: context.locationName, latitude: context.latitude, longitude: context.longitude, confirmed: context.confirmed }
             : null,
           tags: tags.map((t) => ({ tag: t.tag, confidence: t.confidence, origin: t.origin })),
           people: people.map((p) => ({ personName: p.personName, confidence: p.confidence, confirmed: p.confirmed })),
@@ -327,61 +236,41 @@ export class MemoriesController {
 
   /**
    * POST /api/memories/:id/context
-   * Update context: user_note, location, add tags (user), add/confirm people.
    */
   async updateContext(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = req.userId!;
       const { id: memoryId } = req.params;
-      let memory: Awaited<ReturnType<typeof memoryRepository.findById>>;
-      try {
-        memory = await memoryRepository.findById(memoryId);
-      } catch (err) {
-        if (err instanceof NotFoundError && err.message.includes(memoryId)) {
-          await new Promise((r) => setTimeout(r, 800));
-          memory = await memoryRepository.findById(memoryId);
-        } else {
-          throw err;
+      // Retry once — memory may still be committing after upload
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await memoryRepository.findById(memoryId, userId);
+          break;
+        } catch {
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
+          else throw new Error(`Memory ${memoryId} not found`);
         }
       }
-      if (memory.userId == null || memory.userId !== userId) {
-        throw new NotFoundError('Memory', memoryId);
-      }
       const body = req.body as {
-        userNote?: string;
-        locationName?: string;
-        latitude?: number;
-        longitude?: number;
-        tags?: string[];
-        people?: string[];
+        userNote?: string; locationName?: string;
+        latitude?: number; longitude?: number;
+        tags?: string[]; people?: string[];
       };
       const hasContext = body.userNote !== undefined || body.locationName !== undefined || body.latitude !== undefined || body.longitude !== undefined;
       if (hasContext) {
-        await memoryContextRepository.upsert({
-          memoryId,
-          userNote: body.userNote,
-          locationName: body.locationName,
-          latitude: body.latitude,
-          longitude: body.longitude,
-          confirmed: true,
-        });
+        await memoryContextRepository.upsert({ memoryId, userNote: body.userNote, locationName: body.locationName, latitude: body.latitude, longitude: body.longitude, confirmed: true });
       }
       if (Array.isArray(body.tags)) {
         const existing = await memoryTagRepository.findByMemoryId(memoryId);
-        const toKeep = new Set(existing.filter((t) => t.origin === 'ai').map((t) => t.tag));
-        const userTags = body.tags.filter((t) => t?.trim());
-        for (const tag of userTags) {
-          if (!toKeep.has(tag)) await memoryTagRepository.create({ memoryId, tag: tag.trim(), origin: TagOrigin.User });
+        const aiTags = new Set(existing.filter((t) => t.origin === 'ai').map((t) => t.tag));
+        for (const tag of body.tags.filter((t) => t?.trim())) {
+          if (!aiTags.has(tag)) await memoryTagRepository.create({ memoryId, tag: tag.trim(), origin: TagOrigin.User });
         }
       }
       if (Array.isArray(body.people)) {
         for (const name of body.people) {
           if (!name?.trim()) continue;
-          await memoryPeopleRepository.create({
-            memoryId,
-            personName: name.trim(),
-            confirmed: true,
-          });
+          await memoryPeopleRepository.create({ memoryId, personName: name.trim(), confirmed: true });
         }
       }
       const [context, tags, people] = await Promise.all([
@@ -390,7 +279,7 @@ export class MemoriesController {
         memoryPeopleRepository.findByMemoryId(memoryId),
       ]);
       res.json({
-        success: true,
+        ok: true,
         data: {
           context: context ? { userNote: context.userNote, locationName: context.locationName, latitude: context.latitude, longitude: context.longitude, confirmed: context.confirmed } : null,
           tags: tags.map((t) => ({ tag: t.tag, confidence: t.confidence, origin: t.origin })),
@@ -404,16 +293,12 @@ export class MemoriesController {
 
   /**
    * POST /api/memories/:id/confirm-ai
-   * Convert AI suggestions into confirmed. Body: { place?: boolean, people?: string[], tags?: string[] }
    */
   async confirmAi(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = req.userId!;
       const { id: memoryId } = req.params;
-      const memory = await memoryRepository.findById(memoryId);
-      if (memory.userId == null || memory.userId !== userId) {
-        throw new NotFoundError('Memory', memoryId);
-      }
+      await memoryRepository.findById(memoryId, userId);
       const body = req.body as { place?: boolean; people?: string[]; tags?: string[] };
       if (body.place === true) {
         const ctx = await memoryContextRepository.findByMemoryId(memoryId);
@@ -442,7 +327,7 @@ export class MemoriesController {
         memoryPeopleRepository.findByMemoryId(memoryId),
       ]);
       res.json({
-        success: true,
+        ok: true,
         data: {
           context: context ? { userNote: context.userNote, locationName: context.locationName, latitude: context.latitude, longitude: context.longitude, confirmed: context.confirmed } : null,
           tags: tags.map((t) => ({ tag: t.tag, confidence: t.confidence, origin: t.origin })),

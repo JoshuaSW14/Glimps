@@ -57,12 +57,8 @@ export class SearchController {
       
       logger.info('Search request', { query, filters: searchFilters });
       
-      const result = await retrievalService.search(query, searchFilters, req.userId);
-      
-      res.json({
-        success: true,
-        data: result,
-      });
+      const result = await retrievalService.search(query, searchFilters, req.userId!);
+      res.json({ ok: true, data: result });
     } catch (error) {
       next(error);
     }

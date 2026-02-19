@@ -48,7 +48,7 @@ export enum TagOrigin {
  */
 export interface Memory {
   id: string; // UUID
-  userId?: string;
+  userId: string; // NOT NULL after migration 006
   createdAt: Date;
   capturedAt: Date; // When the moment was captured (EXIF or user)
   source: MemorySourceEnum;
@@ -67,7 +67,7 @@ export interface Memory {
  * Input for creating a new memory (e.g. on upload, pending)
  */
 export interface CreateMemoryInput {
-  userId?: string;
+  userId: string; // Required — every memory must belong to a user
   capturedAt: Date;
   source: MemorySourceEnum;
   mediaType: MediaType;
@@ -254,6 +254,7 @@ export interface SearchMetadata {
  * Input for creating a new retrieval log
  */
 export interface CreateRetrievalLogInput {
+  userId: string; // Required after migration 006
   userQuery: string;
   memoryIds: string[];
   searchMetadata?: SearchMetadata;
@@ -268,7 +269,7 @@ export interface CreateRetrievalLogInput {
  */
 export interface MemoryRow {
   id: string;
-  user_id: string | null;
+  user_id: string;
   created_at: Date;
   captured_at: Date;
   source: string;
@@ -330,6 +331,7 @@ export interface MemoryEmbeddingRow {
 export interface RetrievalLogRow {
   id: string;
   created_at: Date;
+  user_id: string;
   user_query: string;
   memory_ids: string[];
   search_metadata: any;
@@ -355,7 +357,7 @@ export interface LabelRow {
  */
 export const mapMemoryRow = (row: MemoryRow): Memory => ({
   id: row.id,
-  userId: row.user_id || undefined,
+  userId: row.user_id,
   createdAt: row.created_at,
   capturedAt: row.captured_at,
   source: row.source as MemorySourceEnum,
@@ -456,7 +458,7 @@ export enum RelationshipType {
  */
 export interface Event {
   id: string; // UUID
-  userId?: string;
+  userId: string; // NOT NULL after migration 006
   startTime: Date; // Earliest memory in event
   endTime: Date;   // Latest memory in event
   title: string;   // Short, human-readable
@@ -481,7 +483,7 @@ export interface CreateEventInput {
   locationLat?: number;
   locationLng?: number;
   confidenceScore: number;
-  userId?: string;
+  userId: string; // Required — every event must belong to a user
 }
 
 /**
@@ -555,7 +557,7 @@ export interface CreateEventEmbeddingInput {
  */
 export interface EventRow {
   id: string;
-  user_id: string | null;
+  user_id: string;
   start_time: Date;
   end_time: Date;
   title: string;
@@ -598,7 +600,7 @@ export interface EventEmbeddingRow {
  */
 export const mapEventRow = (row: EventRow): Event => ({
   id: row.id,
-  userId: row.user_id || undefined,
+  userId: row.user_id,
   startTime: row.start_time,
   endTime: row.end_time,
   title: row.title,

@@ -17,7 +17,7 @@ export class LabelsController {
       const userId = req.userId!;
       const labels = await labelRepository.findByUserId(userId);
       res.json({
-        success: true,
+        ok: true,
         data: { labels },
       });
     } catch (error) {
@@ -39,7 +39,7 @@ export class LabelsController {
         kind: labelKind,
       });
       res.status(201).json({
-        success: true,
+        ok: true,
         data: { label },
       });
     } catch (error) {
@@ -67,7 +67,7 @@ export class LabelsController {
       }
       const label = await labelRepository.update(id, userId, updates);
       res.json({
-        success: true,
+        ok: true,
         data: { label },
       });
     } catch (error) {
@@ -81,7 +81,7 @@ export class LabelsController {
       const { id } = req.params;
       await labelRepository.delete(id, userId);
       res.json({
-        success: true,
+        ok: true,
         data: { deleted: true },
       });
     } catch (error) {

@@ -36,7 +36,6 @@ export interface ProcessMemoryResult {
 export class MemoryPipeline {
   /**
    * Process a memory: extract text (transcribe/caption), normalize, embed, update memory and create embedding.
-   * Optionally create memory_context from metadata (location).
    */
   async processMemory(input: ProcessMemoryInput): Promise<ProcessMemoryResult> {
     const startTime = Date.now();
@@ -44,7 +43,8 @@ export class MemoryPipeline {
 
     logger.info('Starting memory processing pipeline', { memoryId });
 
-    let memory = await memoryRepository.findById(memoryId);
+    // Use internal (no user check) methods — pipeline runs server-side with trusted memoryIds
+    let memory = await memoryRepository.findByIdInternal(memoryId);
     if (memory.processingStatus !== ProcessingStatus.Pending) {
       throw new ProcessingError(`Memory is not pending: ${memory.processingStatus}`, { memoryId });
     }
@@ -54,20 +54,23 @@ export class MemoryPipeline {
         const absolutePath = storageService.getAbsolutePath(memory.storagePath);
         const exifDate = await getCaptureDateFromExif(absolutePath);
         if (exifDate) {
-          await memoryRepository.update(memoryId, { capturedAt: exifDate });
-          memory = await memoryRepository.findById(memoryId);
+          await memoryRepository.updateInternal(memoryId, { capturedAt: exifDate });
+          memory = await memoryRepository.findByIdInternal(memoryId);
         }
       }
 
-      await memoryRepository.update(memoryId, { processingStatus: ProcessingStatus.Processing });
+      await memoryRepository.updateInternal(memoryId, { processingStatus: ProcessingStatus.Processing });
 
       const rawText = await this.extractText(memory.storagePath, memory.mediaType);
       const normalizedText = await normalizationService.normalize(rawText);
-      const aiSummary = this.generateSummary(normalizedText);
-      const embedding = await embeddingService.generateEmbedding(normalizedText);
+      const context = await memoryContextRepository.findByMemoryId(memoryId);
+      const noteAddendum = context?.userNote ? `User note: ${context.userNote}` : '';
+      const analysisInput = noteAddendum ? `${noteAddendum}\n\n${normalizedText}` : normalizedText;
+      const aiSummary = this.generateSummary(analysisInput);
+      const embedding = await embeddingService.generateEmbedding(analysisInput);
 
       const updated = await withTransaction(async (client) => {
-        const mem = await memoryRepository.update(
+        const mem = await memoryRepository.updateInternal(
           memoryId,
           {
             transcript: rawText,
@@ -113,7 +116,7 @@ export class MemoryPipeline {
       return { memory: updated, processingTimeMs };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      await memoryRepository.update(memoryId, {
+      await memoryRepository.updateInternal(memoryId, {
         processingStatus: ProcessingStatus.Failed,
       });
       logger.error('Memory processing failed', { error, memoryId });
@@ -147,14 +150,14 @@ export class MemoryPipeline {
 
   async retryFailedMemory(memoryId: string): Promise<ProcessMemoryResult> {
     logger.info('Retrying failed memory', { memoryId });
-    const memory = await memoryRepository.findById(memoryId);
+    const memory = await memoryRepository.findByIdInternal(memoryId);
     if (memory.processingStatus !== ProcessingStatus.Failed) {
       throw new ProcessingError(
         `Memory is not in failed state: ${memory.processingStatus}`,
         { memoryId }
       );
     }
-    await memoryRepository.update(memoryId, { processingStatus: ProcessingStatus.Pending });
+    await memoryRepository.updateInternal(memoryId, { processingStatus: ProcessingStatus.Pending });
     return this.processMemory({
       memoryId,
       ...(memory.userId && { userId: memory.userId }),

@@ -29,11 +29,12 @@ export class AnswerController {
       
       logger.info('Question received', { question });
       
-      // Generate answer (scoped to user when authenticated)
-      const result = await answerService.generateAnswer(question, req.userId);
-      
-      // Log the retrieval for audit trail
+      const userId = req.userId!;
+      const result = await answerService.generateAnswer(question, userId);
+
+      // Log the retrieval for per-user audit trail
       await retrievalLogRepository.create({
+        userId,
         userQuery: question,
         memoryIds: result.memoryIds,
         searchMetadata: {
@@ -43,9 +44,9 @@ export class AnswerController {
           answerTimeMs: result.answerTimeMs,
         },
       });
-      
+
       res.json({
-        success: true,
+        ok: true,
         data: {
           answer: result.answer,
           confidence: result.confidence,

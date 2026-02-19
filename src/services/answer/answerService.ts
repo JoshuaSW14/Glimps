@@ -60,11 +60,11 @@ Assistant: "Yes, you met with John for a project meeting where you discussed the
    * Generate an answer to a question using retrieved events and memories
    * Phase 3: Event-first retrieval
    */
-  async generateAnswer(question: string, userId?: string): Promise<AnswerResult> {
-    logger.info('Generating answer', { question, hasUserId: !!userId });
-    
+  async generateAnswer(question: string, userId: string): Promise<AnswerResult> {
+    logger.info('Generating answer', { question });
+
     try {
-      // Step 1: Retrieve relevant events (Phase 3 upgrade, scoped to user when provided)
+      // Step 1: Retrieve relevant events scoped to this user
       const searchStart = Date.now();
       const eventResults = await eventRetrievalService.search(question, 5, {}, userId);
       const searchTimeMs = Date.now() - searchStart;
